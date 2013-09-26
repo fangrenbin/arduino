@@ -1,0 +1,127 @@
+#include <EtherCard.h>
+#include <LiquidCrystal.h>
+#include <Stepper.h>
+
+int feedCount = 0;
+//enc28j60
+static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
+static byte myip[] = { 192,168,0,203 };
+byte Ethernet::buffer[700];
+BufferFiller bfill;
+//led 
+const int ledPin = 35;
+//LCD
+LiquidCrystal lcd(12, 11, 5, 4, 3, 6);
+//Stepper
+#define STEPS 48
+Stepper stepper(STEPS, 38, 39, 40, 41);
+
+void setup(){
+  Serial.begin(57600);
+  Serial.println("Feeder demo");
+  //set lcd
+  lcd.begin(16, 2);
+  setupNetwork();
+  //init led
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+  //set stepper
+  stepper.setSpeed(90);
+  //updateLcd
+  Serial.println("Feeder is ready");
+  updateLcd("Ready", "");
+}
+
+void loop(){
+  int feedReq = 0;
+  word len = ether.packetReceive();
+  word pos = ether.packetLoop(len);
+  
+  if(pos){
+    bfill = ether.tcpOffset();
+    if(strstr((char *)Ethernet::buffer + pos, "GET /?feed=xiaobao") != 0){
+      feedReq = 1;
+       bfill.emit_p(PSTR(
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Pragma: no-cache\r\n"
+        "\r\n"
+        "<html><body><h1>Feeder ok!</h1></body></html>"
+        ));
+    }else{
+      bfill.emit_p(PSTR(
+        "HTTP/1.0 401 Unauthorized\r\n"
+        "Content-Type: text/html\r\n"
+        "\r\n"
+        "<h1>401 Unauthorized</h1>"));
+    }
+    ether.httpServerReply(bfill.position());
+  }
+  
+  if(feedReq == 1){
+    feedCount++;
+    Serial.println(feedCount);
+    doFeed();
+    feedReq = 0;
+  }
+}
+
+void doFeed(){
+  updateLcd("Feeding", "LED blink.");
+  for(int i = 0; i < 6; i++){
+    delay(500);
+    digitalWrite(ledPin, HIGH);
+    delay(250);
+    digitalWrite(ledPin, LOW);
+  }
+  digitalWrite(ledPin, HIGH);
+  
+  updateLcd("Feeding", "Opeing.");
+  stepper.step(900);
+  
+  updateLcd("Feeding", "Nudging");
+  for(int nudge = 0; nudge < 2; nudge++){
+    stepper.step(200);
+    stepper.step(-200);
+  }
+  
+  delay(500);
+  updateLcd("Feeding", "Closing");
+  stepper.step(-900);
+  digitalWrite(ledPin, LOW);
+}
+
+void updateLcd(String line1, String line2){
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print(line1);
+    lcd.setCursor(0,1);
+    lcd.print(line2); 
+}
+
+void setupNetwork(){
+  updateLcd("Starting up", "Init network");
+  if(ether.begin(sizeof Ethernet::buffer, mymac) == 0){
+    Serial.println("Failed to access Ethernet controller.");
+    updateLcd("Starting up", "ENC28J60 failed.");
+  }
+  
+  //get ip
+  if(!ether.dhcpSetup()){
+    Serial.println("Failed to get configration from DHCP");
+    updateLcd("Starting up", "DHCP failed.");
+  }
+  
+  if(!ether.staticSetup(myip)){
+    Serial.println("Failed to set ip address");
+    updateLcd("Starting up", "Failed get ip");
+  }
+  
+  //print ip
+  updateLcd("Starting up", "DHCP ok");
+  ether.printIp("IP:", ether.myip);
+  ether.printIp("GW:", ether.gwip);
+  ether.printIp("DNS:", ether.dnsip);
+  
+  delay(500);
+}
