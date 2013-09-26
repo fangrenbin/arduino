@@ -1,158 +1,127 @@
-#include
-#include 
+#include <EtherCard.h>
+#include <LiquidCrystal.h>
+#include <Stepper.h>
 
-byte mac[] = {
-  0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress ip(192, 168, 3, 149);
-
-EthernetServer server(80);
-
-int redLEDpin = 7;
-int blueLEDpin = 8;
-int greenLEDpin = 9;
-
-String readString = String(30);
-String redLEDState = String(3);
-String blueLEDState = String(3);
-String greenLEDState = String(3);
+int feedCount = 0;
+//enc28j60
+static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
+static byte myip[] = { 192,168,0,203 };
+byte Ethernet::buffer[700];
+BufferFiller bfill;
+//led 
+const int ledPin = 35;
+//LCD
+LiquidCrystal lcd(12, 11, 5, 4, 3, 6);
+//Stepper
+#define STEPS 48
+Stepper stepper(STEPS, 38, 39, 40, 41);
 
 void setup(){
-  Serial.begin(9600);
-  while(!Serial){
-    ;//wat for serial prot to connect need for lenoardo only
-  }
-  Ethernet.begin(mac, ip);
-  server.begin();
-
-  Serial.print("Server is at:");
-  Serial.println(Ethernet.localIP());
-
-  pinMode(redLEDpin, OUTPUT);
-  pinMode(blueLEDpin, OUTPUT);
-  pinMode(greenLEDpin, OUTPUT);
-
-  digitalWrite(redLEDpin, LOW);
-  digitalWrite(blueLEDpin, LOW);
-  digitalWrite(greenLEDpin, LOW);
-
-  redLEDState = "OFF";
-  blueLEDState = "OFF";
-  greenLEDState = "OFF";
+  Serial.begin(57600);
+  Serial.println("Feeder demo");
+  //set lcd
+  lcd.begin(16, 2);
+  setupNetwork();
+  //init led
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, LOW);
+  //set stepper
+  stepper.setSpeed(90);
+  //updateLcd
+  Serial.println("Feeder is ready");
+  updateLcd("Ready", "");
 }
 
 void loop(){
-  EthernetClient client = server.available();
-  if(client){
-    boolean currentLineIsBlank = true;
-    while(client.connected()){
-      if(client.available()){
-
-        char c = client.read();
-        Serial.print(c);
-        if(readString.length() < 30){
-          readString.concat(c);
-        }
-
-        if(c == '\n' && currentLineIsBlank){
-          int redLED = readString.indexOf("redLED=");
-          if(readString.substring(redLED,redLED+9) == "redLED=ON"){
-            digitalWrite(redLEDpin, HIGH);
-            Serial.println("red LED IS ON");
-            redLEDState = "ON";
-          }
-          else if(readString.substring(redLED, redLED+10) == "redLED=OFF"){
-            digitalWrite(redLEDpin, LOW);
-            Serial.println("red LED IS OFF");
-            redLEDState = "OFF";
-          }
-
-          int blueLED = readString.indexOf("blueLED=");
-          if(readString.substring(blueLED,blueLED+10) == "blueLED=ON"){
-            digitalWrite(blueLEDpin, HIGH);
-            Serial.println("blue LED IS ON");
-            blueLEDState = "ON";
-          }
-          else if(readString.substring(blueLED, blueLED+11) == "blueLED=OFF"){
-            digitalWrite(blueLEDpin, LOW);
-            Serial.println("blue LED IS OFF");
-            blueLEDState = "OFF";
-          }
-
-          int greenLED = readString.indexOf("greenLED=");
-          if(readString.substring(greenLED,greenLED+11) == "greenLED=ON"){
-            digitalWrite(greenLEDpin, HIGH);
-            Serial.println("green LED IS ON");
-            greenLEDState = "ON";
-          }
-          else if(readString.substring(greenLED, greenLED+12) == "greenLED=OFF"){
-            digitalWrite(greenLEDpin, LOW);
-            Serial.println("green LED IS OFF");
-            greenLEDState = "OFF";
-          }
-          // html start
-          client.println("HTTP/1.1 200 OK");
-          client.println("Content-Type: text/html");
-          client.println();
-
-          // red led
-          client.println("RED LED is");
-          client.print(redLEDState);
-          client.print("--->");
-
-          if(redLEDState == "ON"){
-            client.println("Turn OFF");
-            client.println("
-");
-          }else if(redLEDState == "OFF"){
-            client.println("Turn ON");
-            client.println("
-");
-          }
-
-          //blue led
-          client.println("BLUE LED is");
-          client.print(blueLEDState);
-          client.print("--->");
-
-          if(blueLEDState == "ON"){
-            client.println("Turn OFF");
-            client.println("
-");
-          }else if(blueLEDState == "OFF"){
-            client.println("Turn ON");
-            client.println("
-");
-          }
-
-          //green led
-          client.println("GREEN LED is");
-          client.print(greenLEDState);
-          client.print("--->");
-
-          if(greenLEDState == "ON"){
-            client.println("Turn OFF");
-            client.println("
-");
-          }else if(greenLEDState == "OFF"){
-            client.println("Turn ON");
-            client.println("
-");
-          }
-
-          break;
-        }
-
-        if(c == '\n'){
-          currentLineIsBlank = true;
-        }
-        else if(c != '\r'){
-          currentLineIsBlank = false;
-        }
-      }
+  int feedReq = 0;
+  word len = ether.packetReceive();
+  word pos = ether.packetLoop(len);
+  
+  if(pos){
+    bfill = ether.tcpOffset();
+    if(strstr((char *)Ethernet::buffer + pos, "GET /?feed=xiaobao") != 0){
+      feedReq = 1;
+       bfill.emit_p(PSTR(
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Pragma: no-cache\r\n"
+        "\r\n"
+        "<html><body><h1>Feeder ok!</h1></body></html>"
+        ));
+    }else{
+      bfill.emit_p(PSTR(
+        "HTTP/1.0 401 Unauthorized\r\n"
+        "Content-Type: text/html\r\n"
+        "\r\n"
+        "<h1>401 Unauthorized</h1>"));
     }
-    delay(1);
-    readString = "";
-    client.stop();
-    Serial.print("client is stoped");
+    ether.httpServerReply(bfill.position());
   }
+  
+  if(feedReq == 1){
+    feedCount++;
+    Serial.println(feedCount);
+    doFeed();
+    feedReq = 0;
+  }
+}
+
+void doFeed(){
+  updateLcd("Feeding", "LED blink.");
+  for(int i = 0; i < 6; i++){
+    delay(500);
+    digitalWrite(ledPin, HIGH);
+    delay(250);
+    digitalWrite(ledPin, LOW);
+  }
+  digitalWrite(ledPin, HIGH);
+  
+  updateLcd("Feeding", "Opeing.");
+  stepper.step(900);
+  
+  updateLcd("Feeding", "Nudging");
+  for(int nudge = 0; nudge < 2; nudge++){
+    stepper.step(200);
+    stepper.step(-200);
+  }
+  
+  delay(500);
+  updateLcd("Feeding", "Closing");
+  stepper.step(-900);
+  digitalWrite(ledPin, LOW);
+}
+
+void updateLcd(String line1, String line2){
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print(line1);
+    lcd.setCursor(0,1);
+    lcd.print(line2); 
+}
+
+void setupNetwork(){
+  updateLcd("Starting up", "Init network");
+  if(ether.begin(sizeof Ethernet::buffer, mymac) == 0){
+    Serial.println("Failed to access Ethernet controller.");
+    updateLcd("Starting up", "ENC28J60 failed.");
+  }
+  
+  //get ip
+  if(!ether.dhcpSetup()){
+    Serial.println("Failed to get configration from DHCP");
+    updateLcd("Starting up", "DHCP failed.");
+  }
+  
+  if(!ether.staticSetup(myip)){
+    Serial.println("Failed to set ip address");
+    updateLcd("Starting up", "Failed get ip");
+  }
+  
+  //print ip
+  updateLcd("Starting up", "DHCP ok");
+  ether.printIp("IP:", ether.myip);
+  ether.printIp("GW:", ether.gwip);
+  ether.printIp("DNS:", ether.dnsip);
+  
+  delay(500);
 }
